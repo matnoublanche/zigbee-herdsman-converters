@@ -1,3 +1,4 @@
+import {Zcl} from 'zigbee-herdsman';
 import {Definition, Fz, Logger, Tz, Zh, KeyValue} from '../lib/types';
 import * as exposes from '../lib/exposes';
 import fz from '../converters/fromZigbee';
@@ -11,7 +12,7 @@ const e = exposes.presets;
 const ea = exposes.access;
 
 // develco specific cosntants
-const manufacturerOptions = {manufacturerCode: 0x1015};
+const manufacturerOptions = {manufacturerCode: Zcl.ManufacturerCode.DEVELCO};
 
 /* MOSZB-1xx - ledControl - bitmap8 - r/w
  * 0x00 Disable LED when movement is detected.
@@ -95,7 +96,7 @@ const develco = {
         metering: {
             ...fz.metering,
             convert: (model, msg, publish, options, meta) => {
-                if (msg.data.instantaneousDemand !== -0x800000 && msg.data.currentSummDelivered[1] !== 0) {
+                if (msg.data.instantaneousDemand !== -0x800000 && msg.data.currentSummDelivered?.[1] !== 0) {
                     return fz.metering.convert(model, msg, publish, options, meta);
                 }
             },
@@ -549,6 +550,7 @@ const definitions: Definition[] = [
         fromZigbee: [develco.fz.temperature, fz.battery, fz.ias_smoke_alarm_1_develco, fz.ignore_basic_report,
             fz.ias_enroll, fz.ias_wd, develco.fz.fault_status],
         toZigbee: [tz.warning, tz.ias_max_duration, tz.warning_simple],
+        ota: ota.zigbeeOTA,
         meta: {battery: {voltageToPercentage: '3V_2500'}},
         configure: async (device, coordinatorEndpoint, logger) => {
             const endpoint = device.getEndpoint(35);
@@ -631,7 +633,7 @@ const definitions: Definition[] = [
         },
     },
     {
-        zigbeeModel: ['WISZB-138'],
+        zigbeeModel: ['WISZB-138', 'GWA1513_WindowSensor'],
         model: 'WISZB-138',
         vendor: 'Develco',
         description: 'Window sensor',
@@ -660,7 +662,7 @@ const definitions: Definition[] = [
         exposes: [e.occupancy(), e.battery_low(), e.tamper()],
     },
     {
-        zigbeeModel: ['MOSZB-140'],
+        zigbeeModel: ['MOSZB-140', 'GWA1511_MotionSensor'],
         model: 'MOSZB-140',
         vendor: 'Develco',
         description: 'Motion sensor',
@@ -810,7 +812,8 @@ const definitions: Definition[] = [
             const endpoint35 = device.getEndpoint(35);
             await reporting.bind(endpoint35, coordinatorEndpoint, ['genPowerCfg']);
             const endpoint38 = device.getEndpoint(38);
-            await reporting.temperature(endpoint38);
+            await reporting.bind(endpoint38, coordinatorEndpoint, ['msTemperatureMeasurement']);
+            await reporting.temperature(endpoint38, {min: constants.repInterval.MINUTE, max: constants.repInterval.MINUTES_10, change: 10});
         },
     },
     {

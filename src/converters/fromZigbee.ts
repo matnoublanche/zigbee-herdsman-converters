@@ -437,6 +437,17 @@ const converters1 = {
             }
         },
     } satisfies Fz.Converter,
+    flow: {
+        cluster: 'msFlowMeasurement',
+        type: ['attributeReport', 'readResponse'],
+        convert: (model, msg, publish, options, meta) => {
+            const flow = parseFloat(msg.data['measuredValue']) / 10.0;
+            const property = postfixWithEndpointName('flow', msg, model, meta);
+            if (msg.data.hasOwnProperty('measuredValue')) {
+                return {[property]: flow};
+            }
+        },
+    }satisfies Fz.Converter,
     soil_moisture: {
         cluster: 'msSoilMoisture',
         type: ['attributeReport', 'readResponse'],
@@ -711,18 +722,16 @@ const converters1 = {
 
             if (factor != null && (msg.data.hasOwnProperty('currentSummDelivered') ||
                 msg.data.hasOwnProperty('currentSummReceived'))) {
-                let energy = 0;
                 if (msg.data.hasOwnProperty('currentSummDelivered')) {
                     const data = msg.data['currentSummDelivered'];
                     const value = (parseInt(data[0]) << 32) + parseInt(data[1]);
-                    energy += value * factor;
+                    payload.energy = value * factor;
                 }
                 if (msg.data.hasOwnProperty('currentSummReceived')) {
                     const data = msg.data['currentSummReceived'];
                     const value = (parseInt(data[0]) << 32) + parseInt(data[1]);
-                    energy -= value * factor;
+                    payload.produced_energy = value * factor;
                 }
-                payload.energy = energy;
             }
 
             return payload;
@@ -749,7 +758,11 @@ const converters1 = {
                 {key: 'activePowerPhB', name: 'power_phase_b', factor: 'acPower'},
                 {key: 'activePowerPhC', name: 'power_phase_c', factor: 'acPower'},
                 {key: 'apparentPower', name: 'power_apparent', factor: 'acPower'},
+                {key: 'apparentPowerPhB', name: 'power_apparent_phase_b', factor: 'acPower'},
+                {key: 'apparentPowerPhC', name: 'power_apparent_phase_c', factor: 'acPower'},
                 {key: 'reactivePower', name: 'power_reactive', factor: 'acPower'},
+                {key: 'reactivePowerPhB', name: 'power_reactive_phase_b', factor: 'acPower'},
+                {key: 'reactivePowerPhC', name: 'power_reactive_phase_c', factor: 'acPower'},
                 {key: 'rmsCurrent', name: 'current', factor: 'acCurrent'},
                 {key: 'rmsCurrentPhB', name: 'current_phase_b', factor: 'acCurrent'},
                 {key: 'rmsCurrentPhC', name: 'current_phase_c', factor: 'acCurrent'},
@@ -770,6 +783,12 @@ const converters1 = {
             }
             if (msg.data.hasOwnProperty('powerFactor')) {
                 payload.power_factor = precisionRound(msg.data['powerFactor'] / 100, 2);
+            }
+            if (msg.data.hasOwnProperty('powerFactorPhB')) {
+                payload.power_factor_phase_b = precisionRound(msg.data['powerFactorPhB'] / 100, 2);
+            }
+            if (msg.data.hasOwnProperty('powerFactorPhC')) {
+                payload.power_factor_phase_c = precisionRound(msg.data['powerFactorPhC'] / 100, 2);
             }
             return payload;
         },
@@ -2158,31 +2177,26 @@ const converters1 = {
     } satisfies Fz.Converter,
     tuya_on_off_action: {
         cluster: 'genOnOff',
-        type: 'raw',
+        type: 'commandTuyaAction',
         convert: (model, msg, publish, options, meta) => {
-            if (hasAlreadyProcessedMessage(msg, model, msg.data[1])) return;
+            if (hasAlreadyProcessedMessage(msg, model)) return;
             const clickMapping: KeyValueNumberString = {0: 'single', 1: 'double', 2: 'hold'};
             const buttonMapping: KeyValueNumberString = {1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8'};
             // TS004F has single endpoint, TS0041A/TS0041 can have multiple but have just one button
             const button = msg.device.endpoints.length == 1 || ['TS0041A', 'TS0041'].includes(msg.device.modelID) ?
                 '' : `${buttonMapping[msg.endpoint.ID]}_`;
-            // Since it is a non standard ZCL command, no default response is send from zigbee-herdsman
-            // Send the defaultResponse here, otherwise the second button click delays.
-            // https://github.com/Koenkk/zigbee2mqtt/issues/8149
-            msg.endpoint.defaultResponse(0xfd, 0, 6, msg.data[1]).catch((error) => {});
-            return {action: `${button}${clickMapping[msg.data[3]]}`};
+            return {action: `${button}${clickMapping[msg.data.value]}`};
         },
     } satisfies Fz.Converter,
     tuya_switch_scene: {
         cluster: 'genOnOff',
-        type: 'raw',
+        type: 'commandTuyaAction',
         convert: (model, msg, publish, options, meta) => {
-            if (hasAlreadyProcessedMessage(msg, model, msg.data[1])) return;
+            if (hasAlreadyProcessedMessage(msg, model)) return;
             // Since it is a non standard ZCL command, no default response is send from zigbee-herdsman
             // Send the defaultResponse here, otherwise the second button click delays.
             // https://github.com/Koenkk/zigbee2mqtt/issues/8149
-            msg.endpoint.defaultResponse(0xfd, 0, 6, msg.data[1]).catch((error) => {});
-            return {action: 'switch_scene', action_scene: msg.data[3]};
+            return {action: 'switch_scene', action_scene: msg.data.value};
         },
     } satisfies Fz.Converter,
     livolo_switch_state: {
@@ -2852,6 +2866,32 @@ const converters1 = {
             return result;
         },
     } satisfies Fz.Converter,
+    danfoss_icon_floor_sensor: {
+        cluster: 'hvacThermostat',
+        type: ['attributeReport', 'readResponse'],
+        convert: (model, msg, publish, options, meta) => {
+            const result: KeyValueAny = {};
+            if (msg.data.hasOwnProperty('danfossRoomFloorSensorMode')) {
+                result[postfixWithEndpointName('room_floor_sensor_mode', msg, model, meta)] =
+                    constants.danfossRoomFloorSensorMode.hasOwnProperty(msg.data['danfossRoomFloorSensorMode']) ?
+                        constants.danfossRoomFloorSensorMode[msg.data['danfossRoomFloorSensorMode']] :
+                        msg.data['danfossRoomFloorSensorMode'];
+            }
+            if (msg.data.hasOwnProperty('danfossFloorMinSetpoint')) {
+                const value = precisionRound(msg.data['danfossFloorMinSetpoint'], 2) / 100;
+                if (value >= -273.15) {
+                    result[postfixWithEndpointName('floor_min_setpoint', msg, model, meta)] = value;
+                }
+            }
+            if (msg.data.hasOwnProperty('danfossFloorMaxSetpoint')) {
+                const value = precisionRound(msg.data['danfossFloorMaxSetpoint'], 2) / 100;
+                if (value >= -273.15) {
+                    result[postfixWithEndpointName('floor_max_setpoint', msg, model, meta)] = value;
+                }
+            }
+            return result;
+        },
+    } satisfies Fz.Converter,
     danfoss_icon_battery: {
         cluster: 'genPowerCfg',
         type: ['attributeReport', 'readResponse'],
@@ -2891,6 +2931,26 @@ const converters1 = {
                 constants.danfossMultimasterRole.hasOwnProperty(msg.data['danfossMultimasterRole']) ?
                     constants.danfossMultimasterRole[msg.data['danfossMultimasterRole']] :
                     msg.data['danfossMultimasterRole'];
+            }
+            return result;
+        },
+    } satisfies Fz.Converter,
+    danfoss_icon_hvac_user_interface: {
+        cluster: 'hvacUserInterfaceCfg',
+        type: ['attributeReport', 'readResponse'],
+        convert: (model, msg, publish, options, meta) => {
+            const result: KeyValueAny = {};
+            if (msg.data.hasOwnProperty('keypadLockout')) {
+                result[postfixWithEndpointName('keypad_lockout', msg, model, meta)] =
+                    constants.keypadLockoutMode.hasOwnProperty(msg.data['keypadLockout']) ?
+                        constants.keypadLockoutMode[msg.data['keypadLockout']] :
+                        msg.data['keypadLockout'];
+            }
+            if (msg.data.hasOwnProperty('tempDisplayMode')) {
+                result[postfixWithEndpointName('temperature_display_mode', msg, model, meta)] =
+                    constants.temperatureDisplayMode.hasOwnProperty(msg.data['tempDisplayMode']) ?
+                        constants.temperatureDisplayMode[msg.data['tempDisplayMode']] :
+                        msg.data['tempDisplayMode'];
             }
             return result;
         },
@@ -3182,25 +3242,15 @@ const converters1 = {
                 '105_6': 'press_3_and_4', '105_7': 'press_1_and_2_and_3', '105_8': 'press_4', '105_9': 'press_1_and_4',
                 '105_10': 'press_2_and_4', '105_11': 'press_1_and_2_and_4', '105_12': 'press_3_and_4', '105_13': 'press_1_and_3_and_4',
                 '105_14': 'press_2_and_3_and_4', '105_15': 'press_all', '105_16': 'press_energy_bar', '106_0': 'release',
+                '104_': 'short_press_2_of_2',
             };
 
-            const ID = `${commandID}_${msg.data.commandFrame.raw.slice(0, 1).join('_')}`;
+            const ID = `${commandID}_${msg.data.commandFrame.raw?.slice(0, 1).join('_') ?? ''}`;
             if (!lookup.hasOwnProperty(ID)) {
                 meta.logger.error(`PTM 216Z: missing command '${ID}'`);
             } else {
                 return {action: lookup[ID]};
             }
-        },
-    } satisfies Fz.Converter,
-    lifecontrolVoc: {
-        cluster: 'msTemperatureMeasurement',
-        type: ['attributeReport', 'readResponse'],
-        convert: (model, msg, publish, options, meta) => {
-            const temperature = parseFloat(msg.data['measuredValue']) / 100.0;
-            const humidity = parseFloat(msg.data['minMeasuredValue']) / 100.0;
-            const eco2 = parseFloat(msg.data['maxMeasuredValue']);
-            const voc = parseFloat(msg.data['tolerance']);
-            return {temperature, humidity, eco2, voc};
         },
     } satisfies Fz.Converter,
     _8840100H_water_leak_alarm: {
@@ -4589,23 +4639,18 @@ const converters1 = {
     } satisfies Fz.Converter,
     tuya_multi_action: {
         cluster: 'genOnOff',
-        type: 'raw',
+        type: ['commandTuyaAction', 'commandTuyaAction2'],
         convert: (model, msg, publish, options, meta) => {
-            if (hasAlreadyProcessedMessage(msg, model, msg.data[1])) return;
+            if (hasAlreadyProcessedMessage(msg, model)) return;
 
             let action;
-            if (msg.data[2] == 253) {
+            if (msg.type == 'commandTuyaAction') {
                 const lookup: KeyValueAny = {0: 'single', 1: 'double', 2: 'hold'};
-                action = lookup[msg.data[3]];
-            } else if (msg.data[2] == 252) {
+                action = lookup[msg.data.value];
+            } else if (msg.type == 'commandTuyaAction2') {
                 const lookup: KeyValueAny = {0: 'rotate_right', 1: 'rotate_left'};
-                action = lookup[msg.data[3]];
+                action = lookup[msg.data.value];
             }
-
-            // Since it is a non standard ZCL command, no default response is send from zigbee-herdsman
-            // Send the defaultResponse here, otherwise the second button click delays.
-            // https://github.com/Koenkk/zigbee2mqtt/issues/8149
-            msg.endpoint.defaultResponse(msg.data[2], 0, 6, msg.data[1]).catch((error) => {});
 
             return {action};
         },
@@ -4664,18 +4709,18 @@ const converters1 = {
             const buffer = msg.data;
             const commonForColors = buffer[0] === 17 && buffer[2] === 48 && buffer[3] === 0 && buffer[5] === 8 && buffer[6] === 0;
             let color = null;
-            if (commonForColors && buffer[4] === 255) {
+            if (commonForColors && [255, 254].includes(buffer[4])) {
                 color = 'red';
-            } else if (commonForColors && buffer[4] === 42) {
+            } else if (commonForColors && [42, 41].includes(buffer[4])) {
                 color = 'yellow';
-            } else if (commonForColors && buffer[4] === 85) {
+            } else if (commonForColors && [85, 84].includes(buffer[4])) {
                 color = 'green';
-            } else if (commonForColors && buffer[4] === 170) {
+            } else if (commonForColors && [170, 169].includes(buffer[4])) {
                 color = 'blue';
             }
 
             if (color != null) {
-                return {action: color};
+                return {action: color, action_group: msg.groupID};
             }
         },
     } satisfies Fz.Converter,
@@ -4684,9 +4729,7 @@ const converters1 = {
         type: ['commandMoveHue'],
         convert: (model, msg, publish, options, meta) => {
             if (msg.data.movemode === 1 && msg.data.rate === 12) {
-                return {
-                    action: 'refresh_colored',
-                };
+                return {action: 'refresh_colored', action_group: msg.groupID};
             }
         },
     } satisfies Fz.Converter,
@@ -4698,9 +4741,9 @@ const converters1 = {
             const isRefresh = buffer[0] === 17 && buffer[2] === 16 && (buffer[3] === 1 || buffer[3] === 0) && buffer[4] === 1;
             const isRefreshLong = buffer[0] === 17 && buffer[2] === 16 && buffer[3] === 1 && buffer[4] === 2;
             if (isRefresh) {
-                return {action: 'refresh'};
+                return {action: 'refresh', action_group: msg.groupID};
             } else if (isRefreshLong) {
-                return {action: 'refresh_long'};
+                return {action: 'refresh_long', action_group: msg.groupID};
             }
         },
     } satisfies Fz.Converter,
